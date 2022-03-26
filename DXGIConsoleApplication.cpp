@@ -8,13 +8,13 @@ clock_t start = 0, stop = 0, duration = 0;
 int count = 0;
 FILE *log_file;
 char file_name[MAX_PATH];
-#define align_32(n)  ((((n)+ 31) >> 5) << 5)   //对齐32
+#define align_32(n)  ((((n)+ 31) >> 5) << 5)   //对齐32位  1366 -> 1376
 
-#define BMP_OUT 1
-#define YUVFILE_OUT 0
+#define YUVoutput 0
+#define BMPoutput 1
+#define MORE_AdapterAPP  1  //扩展屏功能
+#if BMPoutput
 
-
-#if BMP_OUT
 void save_as_bitmap(unsigned char *bitmap_data, int bmp_width, int bmp_height, char *filename)
 {
 	//创建了一个文件，我们将在这里保存屏幕截图。
@@ -70,6 +70,9 @@ void save_as_bitmap(unsigned char *bitmap_data, int bmp_width, int bmp_height, c
 	fclose(f);
 }
 
+#endif
+
+#if YUVoutput
 unsigned char clip_value(unsigned char x, unsigned char min_val, unsigned char  max_val) {
 	if (x > max_val) {
 		return max_val;
@@ -120,6 +123,7 @@ bool RGB32_TO_YUV420(unsigned char* RgbBuf, int w, int h, unsigned char* yuvBuf)
 	}
 	return true;
 }
+
 #endif
 
 int main()
@@ -128,16 +132,9 @@ int main()
 	if (log_file == NULL)
 		return -1;
 	//设置缓存区大小并校验
-	int mScreenWidth = GetSystemMetrics(SM_CXSCREEN);
-	int mScreenHeight = GetSystemMetrics(SM_CYSCREEN);		//获取PC桌面的宽和高
-	printf("mScreenWidth = %d,mScreenHeight = %d\n", mScreenWidth, mScreenHeight);
-
-	int BufferSize = align_32(mScreenWidth) * mScreenHeight << 2;	//1366 -> 1376  RGB32位,左移2位*4
 
 	DUPLICATIONMANAGER DuplMgr;
 	DUPL_RETURN Ret;
-
-	
 
 	UINT Output = 0;
 	
@@ -149,6 +146,18 @@ int main()
 		return 0;
 	}
 
+#if MORE_AdapterAPP
+	int BufferSize = align_32(DuplMgr.mScreenWidth) * DuplMgr.mScreenHeight << 2;   //RGB32位，一个像素四字节，左移两位 = * 4  DXGI录屏32位对齐，1366 -> 1376
+	printf("mScreenWidth = %d mScreenHeight = %d BufferSize = %d\n", DuplMgr.mScreenWidth , DuplMgr.mScreenHeight , BufferSize);
+#else
+	int mScreenWidth = GetSystemMetrics(SM_CXSCREEN);
+	int mScreenHeight = GetSystemMetrics(SM_CYSCREEN);		//获取PC桌面的宽和高
+	printf("mScreenWidth = %d,mScreenHeight = %d\n", mScreenWidth, mScreenHeight);
+
+	int BufferSize = align_32(mScreenWidth) * mScreenHeight << 2;   //RGB32位，一个像素四字节，左移两位 = * 4  DXGI录屏32位对齐，1366 -> 1376
+	printf("BufferSize = %d\n", BufferSize);
+#endif
+
 	//注意：DXGI使用32字节宽度对齐，在1366分辨率下实际占用1376的宽度
 	BYTE* pBuf = (BYTE*)malloc(BufferSize);
 	if (pBuf == NULL)
@@ -159,7 +168,7 @@ int main()
 	
 	// Main duplication loop
 	bool timeOut = false;
-#if YUVFILE_OUT
+#if	YUVoutput
 	FILE *fp = fopen("./outfileyuv.yuv", "wb");
 	if (fp == NULL)
 	{
@@ -170,7 +179,8 @@ int main()
 	if (pic_yuv420 == NULL)
 		return -1;
 #endif
-	for (int i = 0; i < 10; i++)
+
+	for (int i = 0; i < 20; i++)
 	{
 		// Get new frame from desktop duplication
 		Ret = DuplMgr.GetFrame(pBuf, timeOut);   //pBuf永远是RGB32位
@@ -178,17 +188,21 @@ int main()
 		{
 			printf_s( "Could not get the frame.");
 		}
-#if BMP_OUT
+#if BMPoutput
 		sprintf_s(file_name, "./BMP/%d.bmp", i);
-		/*bool RtoY = RGB32_TO_YUV420(pBuf, DuplMgr.GetImagePitch()/4, DuplMgr.GetImageHeight(), pic_yuv420);
+#if YUVoutput
+		bool RtoY = RGB32_TO_YUV420(pBuf, DuplMgr.GetImagePitch()/4, DuplMgr.GetImageHeight(), pic_yuv420);
 		if(RtoY == true)
-			fwrite(pic_yuv420, 1, mScreenWidth * mScreenHeight * 3 / 2, fp);*/
-
-		save_as_bitmap(pBuf, mScreenWidth, mScreenHeight, file_name);
+			fwrite(pic_yuv420, 1, mScreenWidth * mScreenHeight * 3 / 2, fp);
+#endif		
+		save_as_bitmap(pBuf, align_32(DuplMgr.mScreenWidth) , DuplMgr.mScreenHeight, file_name);
 #endif
 	}
-	//fclose(fp);
-	delete pBuf;
+
+#if YUVoutput
+	fclose(fp);
+#endif	
+	free(pBuf);
 
 	fclose(log_file);
     return 0;

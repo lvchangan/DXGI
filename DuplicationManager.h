@@ -74,6 +74,13 @@ class DUPLICATIONMANAGER
 		int GetImagePitch();
         bool isScreenRotate();
         bool CheckBufferSize(int BufferSize);
+        int m_nDisPlay = 1;
+        IDXGIAdapter* pAdapter;
+        IDXGIOutput* hDxgiOutput;
+        int Enum();
+        //适配器桌面的宽和高
+        int mScreenWidth;
+        int mScreenHeight;
 	//vars
 
     private:

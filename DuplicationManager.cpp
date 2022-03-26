@@ -1,6 +1,6 @@
 
 #include "DuplicationManager.h"
-
+#include <vector>
 //下面列出了在模式更改、PnpStop、PnpStart等转换事件发生时，Dxgi API调用可能出现的错误
 //桌面交换机、TDR或会话断开/重新连接。在所有这些情况下，我们希望应用程序清理处理的线程
 //桌面将更新并尝试重新创建它们。
@@ -9,6 +9,97 @@
 //https://github.com/balapradeepswork/DXGICaptureApp.git
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
+
+#define MORE_Adapter 1    //扩展屏功能
+
+#if MORE_Adapter
+
+struct DxgiData
+{
+    IDXGIAdapter* pAdapter;
+    IDXGIOutput* pOutput;
+};
+std::vector<DxgiData> m_vOutputs;
+
+int DUPLICATIONMANAGER::Enum()
+{
+    IDXGIFactory1* pFactory1;
+
+    HRESULT hr = CreateDXGIFactory1(__uuidof(IDXGIFactory1), (void**)(&pFactory1));
+
+    if (FAILED(hr))
+    {
+        return 0;
+    }
+
+    for (UINT i = 0;; i++)
+    {
+        IDXGIAdapter1* pAdapter1 = nullptr;
+
+        hr = pFactory1->EnumAdapters1(i, &pAdapter1);       //枚举适配器
+
+        if (hr == DXGI_ERROR_NOT_FOUND)
+        {
+            // no more adapters
+            break;
+        }
+
+        if (FAILED(hr))
+        {
+            return 0;
+        }
+
+        DXGI_ADAPTER_DESC1 desc;
+
+        hr = pAdapter1->GetDesc1(&desc);
+
+        if (FAILED(hr))
+        {
+            return 0;
+        }
+
+        desc.Description;
+
+        for (UINT j = 0;; j++)
+        {
+            IDXGIOutput* pOutput = nullptr;
+
+            HRESULT hr = pAdapter1->EnumOutputs(j, &pOutput);       //枚举输出
+
+            if (hr == DXGI_ERROR_NOT_FOUND)
+            {
+                // no more outputs
+                break;
+            }
+
+            if (FAILED(hr))
+            {
+                return 0;
+            }
+
+            DXGI_OUTPUT_DESC desc;
+
+            hr = pOutput->GetDesc(&desc);
+            if (FAILED(hr))
+            {
+                return 0;
+            }
+
+            desc.DeviceName;
+            desc.DesktopCoordinates.left;
+            desc.DesktopCoordinates.top;
+            int width = desc.DesktopCoordinates.right - desc.DesktopCoordinates.left;
+            int height = desc.DesktopCoordinates.bottom - desc.DesktopCoordinates.top;
+            printf("width x height(%dx%d)\n", width, height);
+            DxgiData data;
+            data.pAdapter = pAdapter1;
+            data.pOutput = pOutput;
+            m_vOutputs.push_back(data);
+        }
+    }
+    return m_vOutputs.size();
+}
+#endif
 
 HRESULT SystemTransitionsExpectedErrors[] = {
 	DXGI_ERROR_DEVICE_REMOVED,
@@ -118,6 +209,17 @@ DUPL_RETURN DUPLICATIONMANAGER::InitDupl(_In_ FILE *log_file, UINT Output)
         return ProcessFailure(nullptr, L"Failed to QI for DXGI Device", hr);
     }
 
+#if MORE_Adapter
+    // QI for Output 1
+    IDXGIOutput1* DxgiOutput1 = nullptr;
+    hr = hDxgiOutput->QueryInterface(__uuidof(DxgiOutput1), reinterpret_cast<void**>(&DxgiOutput1));
+    hDxgiOutput->Release();
+    hDxgiOutput = nullptr;
+    if (FAILED(hr))
+    {
+        return ProcessFailure(m_DxRes->Device, L"Failed to get specified output in DUPLICATIONMANAGER", hr, EnumOutputsExpectedErrors);
+    }
+#else
     //获取DXGI适配器
     IDXGIAdapter* DxgiAdapter = nullptr;
     hr = DxgiDevice->GetParent(__uuidof(IDXGIAdapter), reinterpret_cast<void**>(&DxgiAdapter));
@@ -145,6 +247,8 @@ DUPL_RETURN DUPLICATIONMANAGER::InitDupl(_In_ FILE *log_file, UINT Output)
     hr = DxgiOutput->QueryInterface(__uuidof(DxgiOutput1), reinterpret_cast<void**>(&DxgiOutput1));
     DxgiOutput->Release();
     DxgiOutput = nullptr;
+#endif
+
     if (FAILED(hr))
     {
         return ProcessFailure(nullptr, L"Failed to QI for DxgiOutput1 in DUPLICATIONMANAGER", hr);
@@ -169,6 +273,7 @@ DUPL_RETURN DUPLICATIONMANAGER::InitDupl(_In_ FILE *log_file, UINT Output)
 	m_DeskDupl->GetDesc(&lOutputDuplDesc);
 	desc.Width = lOutputDuplDesc.ModeDesc.Width;
 	desc.Height = lOutputDuplDesc.ModeDesc.Height;
+    printf("desc.Width = %d ,desc.Height = %d\n", desc.Width, desc.Height);
 	desc.Format = lOutputDuplDesc.ModeDesc.Format;
 	desc.ArraySize = 1;
 	desc.BindFlags = 0;
@@ -179,6 +284,8 @@ DUPL_RETURN DUPLICATIONMANAGER::InitDupl(_In_ FILE *log_file, UINT Output)
 	desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
 	desc.Usage = D3D11_USAGE_STAGING;
 
+    mScreenWidth = desc.Width;
+    mScreenHeight = desc.Height;
 	hr = m_DxRes->Device->CreateTexture2D(&desc, NULL, &m_DestImage);
 
 	if (FAILED(hr))
@@ -267,10 +374,11 @@ void  DUPLICATIONMANAGER::CopyImage(BYTE* ImageData)
 	BYTE* sptr = reinterpret_cast<BYTE*>(resource.pData);
 
 	//Store Image Pitch
+    //1366*768分辨率  mWidth = 1366 resource.RowPitch = 1376 * 4
 	m_ImagePitch = resource.RowPitch;
-
 	if (mExtendWidth) {
 		int rowBytes = mWidth * 4;
+        //int rowBytes = m_ImagePitch;
 		for (int i = 0; i < mHeight; i++) {
 			memcpy(ImageData, sptr, rowBytes);
 			ImageData += rowBytes;
@@ -282,72 +390,64 @@ void  DUPLICATIONMANAGER::CopyImage(BYTE* ImageData)
 	}
 
 #if 0
-	//Store Image Pitch
-	m_ImagePitch = resource.RowPitch;
-	int height = GetImageHeight();
-	memcpy_s(ImageData, resource.RowPitch*height, sptr, resource.RowPitch*height);
-#endif
-
-#if 1
-    if (!mExtendWidth)
-    {
-        //将鼠标指针绘制
-        if (m_PtrInfo.PtrShapeBuffer && m_PtrInfo.BufferSize > 0 && m_PtrInfo.Position.y >= 0 && m_PtrInfo.Position.x >= 0) {
-            BYTE* pDst = ImageData + resource.RowPitch * m_PtrInfo.Position.y + 4 * m_PtrInfo.Position.x;
-            //绘制一个矩形测试
-            int drawHeight = min(m_PtrInfo.ShapeInfo.Height, mHeight - m_PtrInfo.Position.y);
-            int drawWidth = min(m_PtrInfo.ShapeInfo.Width, mWidth - m_PtrInfo.Position.x);
-
-            if (m_PtrInfo.ShapeInfo.Type == DXGI_OUTDUPL_POINTER_SHAPE_TYPE_MONOCHROME) {
-                drawHeight = min(m_PtrInfo.ShapeInfo.Height / 2, mHeight - m_PtrInfo.Position.y);
-                /*
-                https://docs.microsoft.com/zh-cn/windows/win32/api/dxgi1_2/ne-dxgi1_2-dxgi_outdupl_pointer_shape_type
-                The pointer type is a monochrome mouse pointer, which is a monochrome bitmap.
-                The bitmap's size is specified by width and height in a 1 bits per pixel (bpp) device independent bitmap (DIB) format AND mask that is followed by another 1 bpp DIB format XOR mask of the same size.
-                */
-                //请注意下面的 m_PtrInfo.ShapeInfo.Height/2，直接定位到 mask
-                BYTE* pSrc = m_PtrInfo.PtrShapeBuffer + m_PtrInfo.ShapeInfo.Height / 2 * m_PtrInfo.ShapeInfo.Pitch;
-                for (int h = drawHeight - 1; h >= 0; h--) {
-                    BYTE* p = pDst;
-                    BYTE* src = pSrc;
-                    int data = src[3] | src[2] << 8 | src[1] << 16 | src[0] << 24;
-                    for (int w = 0; w < drawWidth; w++) {
-                        //按照位来请求数据
-                        bool set = data & (1 << (31 - w));
-                        if (set) {
-                            //应该根据CURSOR中的来设置，但这里简单直接设置反色的
-                            p[0] = 0xff;
-                            p[1] = 255 - p[1];
-                            p[2] = 255 - p[2];
-                            p[3] = 255 - p[3];
-                        }
-                        p += 4;
+    //将鼠标指针绘制
+    if (m_PtrInfo.PtrShapeBuffer && m_PtrInfo.BufferSize > 0 && m_PtrInfo.Position.y >= 0 && m_PtrInfo.Position.x >= 0) {
+        //BYTE* pDst = ImageData + resource.RowPitch * m_PtrInfo.Position.y + 4 * m_PtrInfo.Position.x;
+        BYTE* pDst = ImageData + mWidth * 4 * m_PtrInfo.Position.y + 4 * m_PtrInfo.Position.x;
+        //绘制一个矩形测试   在鼠标的真实宽度和所留下的宽度取最小 
+        int drawHeight = min(m_PtrInfo.ShapeInfo.Height, mHeight - m_PtrInfo.Position.y);
+        int drawWidth = min(m_PtrInfo.ShapeInfo.Width, mWidth - m_PtrInfo.Position.x);
+        
+        if (m_PtrInfo.ShapeInfo.Type == DXGI_OUTDUPL_POINTER_SHAPE_TYPE_MONOCHROME) {
+            //鼠标高度取一半
+            drawHeight = min(m_PtrInfo.ShapeInfo.Height / 2, mHeight - m_PtrInfo.Position.y);
+            /*
+            https://docs.microsoft.com/zh-cn/windows/win32/api/dxgi1_2/ne-dxgi1_2-dxgi_outdupl_pointer_shape_type
+            The pointer type is a monochrome mouse pointer, which is a monochrome bitmap.
+            The bitmap's size is specified by width and height in a 1 bits per pixel (bpp) device independent bitmap (DIB) format AND mask that is followed by another 1 bpp DIB format XOR mask of the same size.
+            */
+            //请注意下面的 m_PtrInfo.ShapeInfo.Height/2，直接定位到 mask
+            BYTE* pSrc = m_PtrInfo.PtrShapeBuffer + m_PtrInfo.ShapeInfo.Height / 2 * m_PtrInfo.ShapeInfo.Pitch;
+            for (int h = drawHeight - 1; h >= 0; h--) {
+                BYTE* p = pDst;
+                BYTE* src = pSrc;
+                int data = src[3] | src[2] << 8 | src[1] << 16 | src[0] << 24;
+                for (int w = 0; w < drawWidth; w++) {
+                    //按照位来请求数据
+                    bool set = data & (1 << (31 - w));
+                    if (set) {
+                        //应该根据CURSOR中的来设置，但这里简单直接设置反色的
+                        p[0] = 0xff;
+                        p[1] = 255 - p[1];
+                        p[2] = 255 - p[2];
+                        p[3] = 255 - p[3];
                     }
-                    pDst += resource.RowPitch;
-                    pSrc += m_PtrInfo.ShapeInfo.Pitch;
+                    p += 4;
                 }
+                pDst += resource.RowPitch;
+                pSrc += m_PtrInfo.ShapeInfo.Pitch;
             }
-            else if (m_PtrInfo.ShapeInfo.Type == DXGI_OUTDUPL_POINTER_SHAPE_TYPE_COLOR) {
-                BYTE* pSrc = m_PtrInfo.PtrShapeBuffer;
-                for (int h = 0; h < drawHeight; h++) {
-                    BYTE* p = pDst;
-                    BYTE* src = pSrc;
-                    for (int w = 0; w < drawWidth; w++) {
-                        if (*src == 0x00) {
-                            //alpha = 0
-                            p += 4;
-                            src += 4;
-                        }
-                        else {
-                            *p++ = *src++;
-                            *p++ = *src++;
-                            *p++ = *src++;
-                            *p++ = *src++;
-                        }
+        }
+        else if (m_PtrInfo.ShapeInfo.Type == DXGI_OUTDUPL_POINTER_SHAPE_TYPE_COLOR) {
+            BYTE* pSrc = m_PtrInfo.PtrShapeBuffer;
+            for (int h = 0; h < drawHeight; h++) {
+                BYTE* p = pDst;
+                BYTE* src = pSrc;
+                for (int w = 0; w < drawWidth; w++) {
+                    if (*src == 0x00) {
+                        //alpha = 0
+                        p += 4;
+                        src += 4;
                     }
-                    pSrc += m_PtrInfo.ShapeInfo.Pitch;
-                    pDst += resource.RowPitch;
+                    else {
+                        *p++ = *src++;
+                        *p++ = *src++;
+                        *p++ = *src++;
+                        *p++ = *src++;
+                    }
                 }
+                pSrc += m_PtrInfo.ShapeInfo.Pitch;
+                pDst += resource.RowPitch;
             }
         }
     }
@@ -356,6 +456,7 @@ void  DUPLICATIONMANAGER::CopyImage(BYTE* ImageData)
 	m_DxRes->Context->Unmap(m_DestImage, subresource);		//Unmap：无效指针指向的资源，并重新启用GPU的访问该资源。
 }
 
+	
 int DUPLICATIONMANAGER::GetImageHeight()
 {
     if (mHeight < 0) {
@@ -509,9 +610,24 @@ void DUPLICATIONMANAGER::DisplayMsg(_In_ LPCWSTR Str, HRESULT hr)
 DUPL_RETURN DUPLICATIONMANAGER::InitializeDx()
 {
 
-	HRESULT hr = S_OK;
+	HRESULT hr = S_OK;                      //返回结果
 
-	// Driver types supported
+#if MORE_Adapter
+    int nCount = Enum();
+    if (nCount <= 0)
+        return DUPL_RETURN_ERROR_EXPECTED;
+    DxgiData data;
+    pAdapter = NULL;
+    hDxgiOutput = NULL;
+    int nSize = m_vOutputs.size();
+    if (m_nDisPlay < 0 || m_nDisPlay >= nSize)
+        m_nDisPlay = 0;
+    data = m_vOutputs.at(m_nDisPlay);
+    hDxgiOutput = data.pOutput;
+    pAdapter = data.pAdapter;
+    hDxgiOutput->GetDesc(&m_OutputDesc);
+#endif
+    //驱动类型数组
 	D3D_DRIVER_TYPE DriverTypes[] =
 	{
 		D3D_DRIVER_TYPE_HARDWARE,
@@ -520,7 +636,7 @@ DUPL_RETURN DUPLICATIONMANAGER::InitializeDx()
 	};
 	UINT NumDriverTypes = ARRAYSIZE(DriverTypes);
 
-	// Feature levels supported
+    //特征级别数组
 	D3D_FEATURE_LEVEL FeatureLevels[] =
 	{
 		D3D_FEATURE_LEVEL_11_0,
@@ -535,8 +651,13 @@ DUPL_RETURN DUPLICATIONMANAGER::InitializeDx()
 	// Create device
 	for (UINT DriverTypeIndex = 0; DriverTypeIndex < NumDriverTypes; ++DriverTypeIndex)
 	{
+#if MORE_Adapter
+        hr = D3D11CreateDevice(pAdapter, D3D_DRIVER_TYPE_UNKNOWN , nullptr, 0, 0, 0,
+            D3D11_SDK_VERSION, &m_DxRes->Device, &FeatureLevel, &m_DxRes->Context);
+#else
 		hr = D3D11CreateDevice(nullptr, DriverTypes[DriverTypeIndex], nullptr, 0, FeatureLevels, NumFeatureLevels,
 			D3D11_SDK_VERSION, &m_DxRes->Device, &FeatureLevel, &m_DxRes->Context);
+#endif
 		if (SUCCEEDED(hr))
 		{
 			// Device creation success, no need to loop anymore
@@ -545,7 +666,7 @@ DUPL_RETURN DUPLICATIONMANAGER::InitializeDx()
 	}
 	if (FAILED(hr))
 	{
-
+        printf("CreateDevice not success\n");
 		return ProcessFailure(nullptr, L"Failed to create device in InitializeDx", hr);
 	}
 
@@ -553,6 +674,7 @@ DUPL_RETURN DUPLICATIONMANAGER::InitializeDx()
 }
 DUPL_RETURN DUPLICATIONMANAGER::GetMouse()
 {
+    //判断鼠标形状位置是否变化
     // A non-zero mouse update timestamp indicates that there is a mouse position update and optionally a shape change
     if (m_FrameInfo.LastMouseUpdateTime.QuadPart == 0)
     {
@@ -575,7 +697,7 @@ DUPL_RETURN DUPLICATIONMANAGER::GetMouse()
         UpdatePosition = false;
     }
 
-    // Update position
+    // Update position   鼠标位置
     if (UpdatePosition)
     {
         m_PtrInfo.Position.x = m_FrameInfo.PointerPosition.Position.x + m_OutputDesc.DesktopCoordinates.left - m_OffsetX;
@@ -584,7 +706,11 @@ DUPL_RETURN DUPLICATIONMANAGER::GetMouse()
         m_PtrInfo.LastTimeStamp = m_FrameInfo.LastMouseUpdateTime;
         m_PtrInfo.Visible = m_FrameInfo.PointerPosition.Visible != 0;
     }
-
+    /*printf("Position.x=%d,Position.y=%d|left=%d,top=%d|m_OffsetX=%d,m_OffsetY=%d|mouse_x =%d,mouse_y= %d\n", 
+        m_FrameInfo.PointerPosition.Position.x,m_FrameInfo.PointerPosition.Position.y,
+        m_OutputDesc.DesktopCoordinates.left, m_OutputDesc.DesktopCoordinates.top,
+        m_OffsetX, m_OffsetY,
+        m_PtrInfo.Position.x, m_PtrInfo.Position.x);*/
     // No new shape
     if (m_FrameInfo.PointerShapeBufferSize == 0)
     {
@@ -623,11 +749,6 @@ DUPL_RETURN DUPLICATIONMANAGER::GetMouse()
 
     return DUPL_RETURN_SUCCESS;
 }
-
-
-
-
-
 
 bool DUPLICATIONMANAGER::isScreenRotate()
 {
