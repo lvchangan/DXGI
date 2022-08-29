@@ -247,12 +247,13 @@ DUPL_RETURN DUPLICATIONMANAGER::InitDupl(_In_ FILE *log_file, UINT Output)
     hr = DxgiOutput->QueryInterface(__uuidof(DxgiOutput1), reinterpret_cast<void**>(&DxgiOutput1));
     DxgiOutput->Release();
     DxgiOutput = nullptr;
-#endif
 
     if (FAILED(hr))
     {
         return ProcessFailure(nullptr, L"Failed to QI for DxgiOutput1 in DUPLICATIONMANAGER", hr);
     }
+
+#endif
 
     // Create desktop duplication 创建桌面复制
     hr = DxgiOutput1->DuplicateOutput(m_DxRes->Device, &m_DeskDupl);

@@ -1,2 +1,0 @@
-D:\GitCode\DXGI\DXGI\Debug\DXGI.exe
-D:\GitCode\DXGI\DXGI\Debug\DXGI.pdb

@@ -3,16 +3,22 @@
 
 #include "DuplicationManager.h"
 #include <time.h>
+#include "SDLPlayer.h"
+#include "log.h"
 #pragma warning(disable:4996)
-clock_t start = 0, stop = 0, duration = 0;
-int count = 0;
+
+//clock_t start = 0, stop = 0, duration = 0;
+//int count = 0;
+
 FILE *log_file;
 char file_name[MAX_PATH];
 #define align_32(n)  ((((n)+ 31) >> 5) << 5)   //对齐32位  1366 -> 1376
 
-#define YUVoutput 0
-#define BMPoutput 1
+#define YUVoutput 0			//输出YUV
+#define BMPoutput 1			//输出BMP
 #define MORE_AdapterAPP  1  //扩展屏功能
+#define SDL_player 1 
+
 #if BMPoutput
 
 void save_as_bitmap(unsigned char *bitmap_data, int bmp_width, int bmp_height, char *filename)
@@ -95,15 +101,15 @@ bool RGB32_TO_YUV420(unsigned char* RgbBuf, int w, int h, unsigned char* yuvBuf)
 	ptrY = yuvBuf;
 	ptrU = yuvBuf + w * h;
 	ptrV = ptrU + (w * h * 1 / 4);
-	unsigned char y, u, v, r, g, b;
+	unsigned char y, u, v,a , r, g, b;
 	for (int j = 0; j < h; j++) {
 		ptrRGB = RgbBuf + w * j * 4; //跳转至第j行开头
 		for (int i = 0; i < w; i++) {
 			int pos = w * i + j;
+			a = *(ptrRGB++);             //a
 			r = *(ptrRGB++);      //依次取出一行中每个像素点的RGB
 			g = *(ptrRGB++);
 			b = *(ptrRGB++);
-			ptrRGB++;             //a
 			y = (unsigned char)((66 * r + 129 * g + 25 * b + 128) >> 8) + 16;       //根据公式转化
 			u = (unsigned char)((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128;
 			v = (unsigned char)((112 * r - 94 * g - 18 * b + 128) >> 8) + 128;
@@ -126,13 +132,17 @@ bool RGB32_TO_YUV420(unsigned char* RgbBuf, int w, int h, unsigned char* yuvBuf)
 
 #endif
 
-int main()
+int WINAPI WinMain(HINSTANCE hinstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
+#if CONSOLE_Debug
+	InitConsoleWindow();
+#endif
+	//创建并打开日志文件
 	fopen_s(&log_file, "logY.txt", "w");
 	if (log_file == NULL)
 		return -1;
-	//设置缓存区大小并校验
 
+	//设置缓存区大小并校验
 	DUPLICATIONMANAGER DuplMgr;
 	DUPL_RETURN Ret;
 
@@ -147,17 +157,18 @@ int main()
 	}
 
 #if MORE_AdapterAPP
-	int BufferSize = align_32(DuplMgr.mScreenWidth) * DuplMgr.mScreenHeight << 2;   //RGB32位，一个像素四字节，左移两位 = * 4  DXGI录屏32位对齐，1366 -> 1376
+	int BufferSize = align_32(DuplMgr.mScreenWidth) * DuplMgr.mScreenHeight << 2;   //ARGB32位，一个像素四字节，左移两位 = * 4  DXGI录屏32位对齐，1366 -> 1376
 	printf("mScreenWidth = %d mScreenHeight = %d BufferSize = %d\n", DuplMgr.mScreenWidth , DuplMgr.mScreenHeight , BufferSize);
 #else
 	int mScreenWidth = GetSystemMetrics(SM_CXSCREEN);
 	int mScreenHeight = GetSystemMetrics(SM_CYSCREEN);		//获取PC桌面的宽和高
-	printf("mScreenWidth = %d,mScreenHeight = %d\n", mScreenWidth, mScreenHeight);
-
 	int BufferSize = align_32(mScreenWidth) * mScreenHeight << 2;   //RGB32位，一个像素四字节，左移两位 = * 4  DXGI录屏32位对齐，1366 -> 1376
-	printf("BufferSize = %d\n", BufferSize);
+	printf("mScreenWidth = %d mScreenHeight = %d BufferSize = %d\n", mScreenWidth, mScreenHeight, BufferSize);
 #endif
 
+#if	SDL_player
+	SDLPlayer* player = new SDLPlayer(DuplMgr.mScreenWidth, DuplMgr.mScreenHeight);
+#endif
 	//注意：DXGI使用32字节宽度对齐，在1366分辨率下实际占用1376的宽度
 	BYTE* pBuf = (BYTE*)malloc(BufferSize);
 	if (pBuf == NULL)
@@ -175,35 +186,48 @@ int main()
 		printf_s("open fp error\n");
 		return -1;
 	}
-	unsigned char* pic_yuv420 = (unsigned char*)malloc(mScreenWidth * mScreenHeight * 3 / 2);
+	unsigned char* pic_yuv420 = (unsigned char*)malloc(DuplMgr.mScreenWidth * DuplMgr.mScreenHeight * 3 / 2);
 	if (pic_yuv420 == NULL)
 		return -1;
 #endif
 
-	for (int i = 0; i < 20; i++)
+	for (int i = 0; i < 500; i++)
 	{
 		// Get new frame from desktop duplication
-		Ret = DuplMgr.GetFrame(pBuf, timeOut);   //pBuf永远是RGB32位
+		Ret = DuplMgr.GetFrame(pBuf, timeOut);   //pBuf永远是ARGB32位
 		if (Ret != DUPL_RETURN_SUCCESS)
 		{
 			printf_s( "Could not get the frame.");
 		}
-#if BMPoutput
-		sprintf_s(file_name, "./BMP/%d.bmp", i);
+#if	SDL_player
+		//bool RtoY = RGB32_TO_YUV420(pBuf, DuplMgr.GetImagePitch() / 4, DuplMgr.GetImageHeight(), pic_yuv420);
+		player->SDLPlayerFrame(pBuf);
+#else
 #if YUVoutput
 		bool RtoY = RGB32_TO_YUV420(pBuf, DuplMgr.GetImagePitch()/4, DuplMgr.GetImageHeight(), pic_yuv420);
 		if(RtoY == true)
-			fwrite(pic_yuv420, 1, mScreenWidth * mScreenHeight * 3 / 2, fp);
-#endif		
+			fwrite(pic_yuv420, 1, DuplMgr.mScreenWidth * DuplMgr.mScreenHeight * 3 / 2, fp);
+#endif	
+#if BMPoutput
+		sprintf_s(file_name, "./BMP/%d.bmp", i);
 		save_as_bitmap(pBuf, align_32(DuplMgr.mScreenWidth) , DuplMgr.mScreenHeight, file_name);
+#endif
 #endif
 	}
 
 #if YUVoutput
 	fclose(fp);
 #endif	
+
+#if	SDL_player
+	delete player;
+#endif
+
 	free(pBuf);
 
 	fclose(log_file);
+#if CONSOLE_Debug
+	DeInitConsoleWindow();
+#endif
     return 0;
 }
